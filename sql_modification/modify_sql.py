@@ -1,20 +1,26 @@
+from typing import Any
+
 import sqlglot
 
 
 def add_filters_to_query(
-    query: str, tenancy_id: str, channel_id: str, read_dialect: str = "druid", write_dialect: str = "druid"
+    query: str,
+    mandatory_filter_column: str,
+    mandatory_filter_value: str,
+    read_dialect: str = "druid",
+    write_dialect: str = "druid",
 ) -> str:
-    """Add tenancy_id and channel_id filters to all SELECT statements in a SQL query
+    """Add mandatory filter to all SELECT statements in a SQL query
 
     Args:
         query: SQL query string to modify
-        tenancy_id: Tenant identifier value to filter by
-        channel_id: Channel identifier value to filter by
+        mandatory_filter_column: Column name to filter by
+        mandatory_filter_value: Value to filter by
         read_dialect: SQL dialect for parsing (default: "druid")
         write_dialect: SQL dialect for output (default: "druid")
 
     Returns:
-        Modified SQL query with filters added to all SELECT statements
+        Modified SQL query with filter added to all SELECT statements
 
     Raises:
         ValueError: If query cannot be parsed
@@ -32,12 +38,12 @@ def add_filters_to_query(
             for select in select_statements:
                 where = select.find(sqlglot.exp.Where)
 
-                # Collect all non-tenancy/channel conditions to preserve
+                # Collect all non-mandatory-filter conditions to preserve
                 preserved_conditions = []
 
                 if where:
-                    # Helper function to check if a condition is a tenancy_id or channel_id filter
-                    def is_tenancy_or_channel_filter(condition):
+                    # Helper function to check if a condition is the mandatory filter
+                    def is_mandatory_filter(condition):
                         if not isinstance(condition, sqlglot.exp.EQ):
                             return False
 
@@ -53,27 +59,28 @@ def add_filters_to_query(
 
                         if column:
                             column_name = column.name.upper()
-                            return column_name in ("TENANCY_ID", "CHANNEL_ID")
+                            return column_name == mandatory_filter_column.upper()
                         return False
 
-                    # Walk through WHERE clause and collect non-tenancy/channel conditions
+                    # Walk through WHERE clause and collect non-mandatory-filter conditions
                     def collect_conditions(node, conditions_list):
                         if isinstance(node, sqlglot.exp.And):
                             # Recursively process both sides
                             collect_conditions(node.left, conditions_list)
                             collect_conditions(node.right, conditions_list)
-                        elif not is_tenancy_or_channel_filter(node):
+                        elif not is_mandatory_filter(node):
                             # Keep this condition
                             conditions_list.append(node)
 
                     collect_conditions(where.this, preserved_conditions)
 
-                # Build new WHERE clause with preserved conditions + correct filters
-                tenancy_filter = sqlglot.condition(f"tenancy_id = '{tenancy_id}'", dialect=write_dialect)
-                channel_filter = sqlglot.condition(f"channel_id = '{channel_id}'", dialect=write_dialect)
+                # Build new WHERE clause with preserved conditions + correct filter
+                mandatory_filter = sqlglot.condition(
+                    f"{mandatory_filter_column} = '{mandatory_filter_value}'", dialect=write_dialect
+                )
 
                 # Combine all conditions
-                all_conditions = preserved_conditions + [tenancy_filter, channel_filter]
+                all_conditions = preserved_conditions + [mandatory_filter]
 
                 if all_conditions:
                     combined = all_conditions[0]
@@ -88,10 +95,17 @@ def add_filters_to_query(
         raise ValueError(f"Failed to parse SQL query: {e}")
 
 
-query = """
-        WITH temp AS (
-            SELECT * FROM sumup WHERE status = 'active'
-        )
-        SELECT * FROM temp WHERE amount > 100
-        """
-print(add_filters_to_query(query=query, tenancy_id=1, channel_id=1, read_dialect="druid"))
+def add_additional_filters_to_query(additional_filters: list[dict[str, Any]] | None, new_query: str) -> str:
+    if additional_filters:
+        for filter_spec in additional_filters:
+            if "filter_column" not in filter_spec:
+                raise ValueError("Each additional filter must have 'filter_column' key")
+            if "filter_value" not in filter_spec:
+                raise ValueError("Each additional filter must have 'filter_value' key")
+
+            filter_column = filter_spec["filter_column"]
+            filter_value = str(filter_spec["filter_value"])
+
+            # Validate that the query filters by this column with this value
+            new_query = add_filters_to_query(new_query, filter_column, filter_value)
+    return new_query

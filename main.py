@@ -11,8 +11,10 @@ import httpx
 from dateutil.relativedelta import relativedelta
 from fastmcp import Context, FastMCP
 
+from sql_modification.modify_sql import add_additional_filters_to_query, add_filters_to_query
 from validation.validate_sql_queries import (
-    validate_query_is_filtered_by_tenancy_and_channel,
+    validate_query_is_filtered_by_additional_filters,
+    validate_query_is_filtered_by_mandatory_filter_column,
     validate_query_is_read_only,
 )
 
@@ -30,7 +32,9 @@ def parse_key_value_pairs(pairs: str) -> dict[str, str]:
 
 
 DRUID_CLUSTER_URLS = check_truthy(
-    parse_key_value_pairs(getenv("DRUID_CLUSTER_URLS", "localhost=http://localhost:8088")),
+    parse_key_value_pairs(
+        getenv("DRUID_CLUSTER_URLS", "localhost=http://localhost:8088 localhost-livia=http://localhost:54251")
+    ),
     "DRUID_CLUSTER_URLS must not be empty",
 )
 
@@ -224,43 +228,54 @@ async def list_clusters() -> list[str]:
     return sorted(DRUID_CLUSTER_URLS.keys())
 
 
-# filter_column
-# filter_value
-#
-# additional_filters = {"filters": [{"column_name": "channel_id", "filter_value": 10}]}
-#
-
-# filters = {
-#     "mandatory": [],
-#     "optional": [],
-# }
-
-# filters = [{"column_name": "channel_id", "filter_value": 10}]
-
 @mcp.tool()
 async def execute_sql_query(
-    cluster: str, tenancy_id: str, channel_id: str, query: str, ctx: Context, context: dict[str, Any] | None = None
+    cluster: str,
+    tenancy_id: str,
+    query: str,
+    ctx: Context,
+    context: dict[str, Any] | None = None,
+    additional_filters: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Execute SQL query against Druid
 
     Args:
         cluster: Target cluster name (e.g., 'fret-dev', 'fret-prod')
-        tenancy_id: Tenant identifier for the query. The query must be filtered by the tenancy id
-        channel_id: Channel identifier for the query. The query must be filtered by the channel id
+        tenancy_id: Tenant identifier value to filter by
         query: SQL query string (SELECT only)
+        ctx: MCP context
         context: Optional query context parameters
+        additional_filters: Optional list of filters that the query must include if provided.
+                           Each filter is a dict with 'filter_column' and 'filter_value' keys.
+                           The MCP will validate that the query filters by these columns.
+                           Example: [{"filter_column": "channel_id", "filter_value": "ABC"}]
 
     Returns:
         Query results as a list of objects
 
     Example:
-        execute_sql_query("fret-prod", "tenant-123", "channel-456", "SELECT COUNT(*) FROM datasource")
+        execute_sql_query("fret-prod", "tenant-123", "SELECT COUNT(*) FROM datasource WHERE tenancy_id = 'tenant-123'")
+        execute_sql_query("fret-prod", "tenant-123", "SELECT * FROM datasource WHERE channel_id = 'ABC'",
+                         additional_filters=[{"filter_column": "channel_id", "filter_value": "ABC"}])
 
     Raises:
-        ValueError: If query contains non-SELECT statements or missing tenant/channel filters
+        ValueError: If query contains non-SELECT statements, missing mandatory filter,
+                   or doesn't include the required additional filters
     """
+
+    if "livia" in cluster:
+        # TODO ping druid to get mapping from tenancy_id -> mandatory_filter_column
+        mandatory_filter_column = ""
+        mandatory_filter_value = ""
+    else:
+        mandatory_filter_column = "tenancy_id"
+        mandatory_filter_value = tenancy_id
+
     validate_query_is_read_only(query)
-    validate_query_is_filtered_by_tenancy_and_channel(query, tenancy_id, channel_id)
+    validate_query_is_filtered_by_mandatory_filter_column(query, mandatory_filter_column, mandatory_filter_value)
+
+    # Validate additional filters if provided
+    validate_query_is_filtered_by_additional_filters(additional_filters, query)
 
     payload: dict[str, Any] = {"query": query}
     if context:
@@ -269,33 +284,69 @@ async def execute_sql_query(
     return await _make_request(cluster, "POST", "/druid/v2/sql", ctx, json_data=payload)
 
 
-#
-# @mcp.tool()
-# async def execute_native_query(cluster: str, query: dict[str, Any]) -> list[dict[str, Any]]:
-#     """Execute native JSON query against Druid
-#
-#     Args:
-#         cluster: Target cluster name (e.g., 'fret-dev', 'fret-prod')
-#         query: Native query as JSON object (must include queryType and dataSource)
-#
-#     Returns:
-#         Query results as list of objects
-#
-#     Example:
-#         execute_native_query("fret-prod", {
-#             "queryType": "timeseries",
-#             "dataSource": "wikipedia",
-#             "intervals": ["2015-09-12/2015-09-13"],
-#             "granularity": "hour",
-#             "aggregations": [{"type": "count", "name": "count"}]
-#         })
-#     """
-#     if "queryType" not in query:
-#         raise ValueError("Query must include 'queryType' field")
-#     if "dataSource" not in query:
-#         raise ValueError("Query must include 'dataSource' field")
-#
-#     return await _make_request(cluster, "POST", "/druid/v2", json_data=query)
+# async def execute_sql_query_livia(
+#     tenancy_id: str,
+#     query: str,
+#     ctx: Context,
+#     context: dict[str, Any] | None = None,
+#     additional_filters: list[dict[str, Any]] | None = None,) -> list[dict[str, Any]]:
+#     """Execute SQL query against Druid"""
+
+
+@mcp.tool()
+async def execute_sql_query_modify_sql(
+    cluster: str,
+    tenancy_id: str,
+    query: str,
+    ctx: Context,
+    context: dict[str, Any] | None = None,
+    additional_filters: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Execute SQL query against Druid
+
+    Args:
+        cluster: Target cluster name (e.g., 'fret-dev', 'fret-prod')
+        tenancy_id: Tenant identifier value to filter by
+        query: SQL query string (SELECT only)
+        ctx: MCP context
+        context: Optional query context parameters
+        additional_filters: Optional list of filters that the query must include if provided.
+                           Each filter is a dict with 'filter_column' and 'filter_value' keys.
+                           The MCP will validate that the query filters by these columns.
+                           Example: [{"filter_column": "channel_id", "filter_value": "ABC"}]
+
+    Returns:
+        Query results as a list of objects
+
+    Example:
+        execute_sql_query("fret-prod", "tenant-123", "SELECT COUNT(*) FROM datasource WHERE tenancy_id = 'tenant-123'")
+        execute_sql_query("fret-prod", "tenant-123", "SELECT * FROM datasource WHERE channel_id = 'ABC'",
+                         additional_filters=[{"filter_column": "channel_id", "filter_value": "ABC"}])
+
+    Raises:
+        ValueError: If query contains non-SELECT statements, missing mandatory filter,
+                   or doesn't include the required additional filters
+    """
+
+    if "livia" in cluster:
+        # TODO ping druid to get mapping from tenancy_id -> mandatory_filter_column
+        mandatory_filter_column = ""
+        mandatory_filter_value = ""
+    else:
+        mandatory_filter_column = "tenancy_id"
+        mandatory_filter_value = tenancy_id
+
+    validate_query_is_read_only(query)
+    new_query = add_filters_to_query(query, mandatory_filter_column, mandatory_filter_value)
+
+    # Validate additional filters if provided
+    new_query = add_additional_filters_to_query(additional_filters, new_query)
+
+    payload: dict[str, Any] = {"query": new_query}
+    if context:
+        payload["context"] = context
+
+    return await _make_request(cluster, "POST", "/druid/v2/sql", ctx, json_data=payload)
 
 
 @mcp.tool()
@@ -811,6 +862,15 @@ Queries to run:
 2. Find min/max values for metrics
 3. Check time coverage and gaps
 4. Verify expected dimension cardinality"""
+
+
+@mcp.prompt()
+def get_livia_look_data_insights_for_event(event_start: str, event_end: str) -> str:
+    return f"""Do the following:
+    1. To get the data - filter the livia druid datasource for __time between {event_start} and {event_end} and type = 'look'. Only get the age, gender columns.
+    2. Calculate statistics on the retrieved data.
+    3. Give insights on the data.
+    """
 
 
 if __name__ == "__main__":

@@ -1,19 +1,21 @@
+from typing import Any
+
 import sqlglot
 
 
-def validate_query_is_filtered_by_tenancy_and_channel(
-    query: str, tenancy_id: str, channel_id: str, read: str = "druid"
+def validate_query_is_filtered_by_mandatory_filter_column(
+    query: str, mandatory_filter_column: str, mandatory_filter_value: str, read: str = "druid"
 ) -> None:
-    """Validate that the SQL query filters by tenancy_id and channel_id
+    """Validate that the SQL query filters by a mandatory column
 
     Args:
         query: SQL query string to validate
-        tenancy_id: Expected tenant identifier value
-        channel_id: Expected channel identifier value
+        mandatory_filter_column: Name of the column that must be filtered
+        mandatory_filter_value: Expected value for the filter
         read: SQL dialect (default: "druid")
 
     Raises:
-        ValueError: If query doesn't filter by both tenancy_id and channel_id with correct values
+        ValueError: If query doesn't filter by the mandatory column with correct value
     """
     try:
         parsed = sqlglot.parse(query, read=read)
@@ -34,12 +36,11 @@ def validate_query_is_filtered_by_tenancy_and_channel(
                 if not where:
                     raise ValueError(
                         f"All SELECT statements must include WHERE clause filtering by "
-                        f"tenancy_id='{tenancy_id}' and channel_id='{channel_id}'"
+                        f"{mandatory_filter_column}='{mandatory_filter_value}'"
                     )
 
                 # Find all equality conditions in WHERE clause
-                has_tenancy_filter = False
-                has_channel_filter = False
+                has_mandatory_filter = False
 
                 for condition in where.find_all(sqlglot.exp.EQ):
                     left = condition.left
@@ -60,21 +61,13 @@ def validate_query_is_filtered_by_tenancy_and_channel(
                         column_name = column.name.upper()
                         value = literal.this
 
-                        if column_name == "TENANCY_ID" and value == str(tenancy_id):
-                            has_tenancy_filter = True
-                        elif column_name == "CHANNEL_ID" and value == str(channel_id):
-                            has_channel_filter = True
+                        if column_name == mandatory_filter_column.upper() and value == str(mandatory_filter_value):
+                            has_mandatory_filter = True
 
-                if not has_tenancy_filter:
+                if not has_mandatory_filter:
                     raise ValueError(
-                        f"All SELECT statements must filter by tenancy_id='{tenancy_id}'. "
-                        f"Add 'WHERE tenancy_id = '{tenancy_id}'' to your query."
-                    )
-
-                if not has_channel_filter:
-                    raise ValueError(
-                        f"All SELECT statements must filter by channel_id='{channel_id}'. "
-                        f"Add 'AND channel_id = '{channel_id}'' to your query."
+                        f"All SELECT statements must filter by {mandatory_filter_column}='{mandatory_filter_value}'. "
+                        f"Add 'WHERE {mandatory_filter_column} = '{mandatory_filter_value}'' to your query."
                     )
 
     except sqlglot.errors.ParseError as e:
@@ -114,3 +107,16 @@ def validate_query_is_read_only(query: str, read: str = "druid") -> None:
 
 
 # validate_query_filters("select channel_id, tenancy_id from sumup where 'JTI' = channel_id and 1=tenancy_id", "1", "JI")
+def validate_query_is_filtered_by_additional_filters(additional_filters: list[dict[str, Any]] | None, query: str):
+    if additional_filters:
+        for filter_spec in additional_filters:
+            if "filter_column" not in filter_spec:
+                raise ValueError("Each additional filter must have 'filter_column' key")
+            if "filter_value" not in filter_spec:
+                raise ValueError("Each additional filter must have 'filter_value' key")
+
+            filter_column = filter_spec["filter_column"]
+            filter_value = str(filter_spec["filter_value"])
+
+            # Validate that the query filters by this column with this value
+            validate_query_is_filtered_by_mandatory_filter_column(query, filter_column, filter_value)
