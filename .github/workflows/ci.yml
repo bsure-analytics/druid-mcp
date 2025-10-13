@@ -1,4 +1,4 @@
-name: CI
+name: Code quality check / run tests
 
 on:
   push:
