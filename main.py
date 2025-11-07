@@ -12,6 +12,7 @@ from dateutil.relativedelta import relativedelta
 from fastmcp import Context, FastMCP
 
 from sql_modification.modify_sql import add_additional_filters_to_query, add_filters_to_query
+from utils import json_table_to_csv
 from validation.validate_sql_queries import (
     validate_query_is_filtered_by_additional_filters,
     validate_query_is_filtered_by_mandatory_filter_column,
@@ -236,7 +237,8 @@ async def execute_sql_query(
     ctx: Context,
     context: dict[str, Any] | None = None,
     additional_filters: list[dict[str, Any]] | None = None,
-) -> list[dict[str, Any]]:
+    output_format: str = "csv",
+) -> str | list[dict[str, Any]]:
     """Execute SQL query against Druid
 
     Args:
@@ -249,9 +251,10 @@ async def execute_sql_query(
                            Each filter is a dict with 'filter_column' and 'filter_value' keys.
                            The MCP will validate that the query filters by these columns.
                            Example: [{"filter_column": "channel_id", "filter_value": "ABC"}]
+        output_format: Output format (csv, json)
 
     Returns:
-        Query results as a list of objects
+        Query results as a list of objects or a single string if output format is 'csv'
 
     Example:
         execute_sql_query("fret-prod", "tenant-123", "SELECT COUNT(*) FROM datasource WHERE tenancy_id = 'tenant-123'")
@@ -281,16 +284,10 @@ async def execute_sql_query(
     if context:
         payload["context"] = context
 
-    return await _make_request(cluster, "POST", "/druid/v2/sql", ctx, json_data=payload)
-
-
-# async def execute_sql_query_livia(
-#     tenancy_id: str,
-#     query: str,
-#     ctx: Context,
-#     context: dict[str, Any] | None = None,
-#     additional_filters: list[dict[str, Any]] | None = None,) -> list[dict[str, Any]]:
-#     """Execute SQL query against Druid"""
+    output = await _make_request(cluster, "POST", "/druid/v2/sql", ctx, json_data=payload)
+    if output_format == "csv":
+        output = json_table_to_csv(output)
+    return output
 
 
 @mcp.tool()
@@ -874,4 +871,4 @@ def get_livia_look_data_insights_for_event(event_start: str, event_end: str) -> 
 
 
 if __name__ == "__main__":
-    mcp.run(transport="sse", host="0.0.0.0", port=5680)
+    mcp.run(transport="http", host="0.0.0.0", port=5680)
