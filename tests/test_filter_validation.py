@@ -196,3 +196,85 @@ class TestFilterValidation:
         """
         with pytest.raises(ValueError, match=r"must filter by tenancy_id='123'"):
             validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_or_condition_with_mandatory_column_rejected(self):
+        """Query with OR condition where mandatory column has different value should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id = '123' OR tenancy_id = '456'"
+        with pytest.raises(ValueError, match=r"OR.*tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_or_condition_with_other_columns_allowed(self):
+        """Query with OR between other columns (not mandatory column) should be allowed"""
+        query = "SELECT * FROM sumup WHERE tenancy_id = '123' AND (channel_id = 'ABC' OR status = 'active')"
+        validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_in_clause_with_multiple_values_rejected(self):
+        """Query with IN clause containing mandatory value and others should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id IN ('123', '456')"
+        with pytest.raises(ValueError, match=r"IN clauses on tenancy_id are not allowed"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_not_equals_mandatory_column_rejected(self):
+        """Query with != on mandatory column should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id != '456' AND tenancy_id = '123'"
+        with pytest.raises(ValueError, match=r"Only equality \(=\) is allowed on tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_or_tenancy_id_in_list_of_not_allowed_ids(self):
+        """Query with IN clause in OR condition should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id = '123' OR tenancy_id IN ('123', '456')"
+        with pytest.raises(ValueError, match=r"OR.*tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_or_with_always_true_condition_rejected(self):
+        """Query with OR and always-true condition should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id = '123' OR 1=1"
+        with pytest.raises(ValueError, match=r"OR.*tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_or_with_other_filter_on_mandatory_column_rejected(self):
+        """Query with OR on other condition with mandatory column should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id = '123' OR amount > 0"
+        with pytest.raises(ValueError, match=r"OR.*tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_or_in_parentheses_with_mandatory_column_rejected(self):
+        """Query with OR in parentheses containing mandatory column should be rejected"""
+        query = "SELECT * FROM sumup WHERE (tenancy_id = '123' OR status = 'active')"
+        with pytest.raises(ValueError, match=r"OR.*tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_is_null_with_or_rejected(self):
+        """Query with IS NULL in OR clause should be rejected (caught by OR validator)"""
+        query = "SELECT * FROM sumup WHERE tenancy_id IS NULL OR tenancy_id = '123'"
+        with pytest.raises(ValueError, match=r"OR.*tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_is_null_on_other_column_allowed(self):
+        """Query with IS NULL on non-mandatory column should be allowed"""
+        query = "SELECT * FROM sumup WHERE tenancy_id = '123' AND status IS NULL"
+        validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_case_without_mandatory_column_allowed(self):
+        """Query with CASE expression not referencing mandatory column should be allowed"""
+        query = """SELECT * FROM sumup WHERE tenancy_id = '123' AND
+                   CASE WHEN status = 'active' THEN 1 ELSE 0 END = 1"""
+        validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_is_distinct_from_rejected(self):
+        """Query with IS DISTINCT FROM on mandatory column should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id IS DISTINCT FROM '456' AND tenancy_id = '123'"
+        with pytest.raises(ValueError, match=r"Only equality \(=\) is allowed on tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_like_operator_rejected(self):
+        """Query with LIKE on mandatory column should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id LIKE '12%' AND tenancy_id = '123'"
+        with pytest.raises(ValueError, match=r"Only equality \(=\) is allowed on tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")
+
+    def test_ilike_operator_rejected(self):
+        """Query with ILIKE on mandatory column should be rejected"""
+        query = "SELECT * FROM sumup WHERE tenancy_id ILIKE '12%' AND tenancy_id = '123'"
+        with pytest.raises(ValueError, match=r"Only equality \(=\) is allowed on tenancy_id"):
+            validate_query_is_filtered_by_mandatory_filter_column(query, "tenancy_id", "123")

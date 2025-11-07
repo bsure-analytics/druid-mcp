@@ -1,10 +1,10 @@
 import csv
 import io
-from typing import List, Dict, Any
+from typing import Any
 
 
 def json_table_to_csv(
-    data: List[Dict[str, Any]],
+    data: list[dict[str, Any]],
 ) -> str:
     """Convert JSON table data to CSV format for better LLM readability.
 
@@ -39,7 +39,7 @@ def json_table_to_csv(
     columns = list(data[0].keys())
     # Write to CSV
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=columns, extrasaction='ignore')
+    writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
 
     writer.writeheader()
     writer.writerows(data)
