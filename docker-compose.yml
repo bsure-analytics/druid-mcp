@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  druid-mcp:
+    build: .
+    image: druid-mcp:latest
+    container_name: druid-mcp
+    ports:
+      - "5680:5680"
+      - "54250:54250"
+    env_file:
+      - .env
+      - .env.local
+    restart: unless-stopped
